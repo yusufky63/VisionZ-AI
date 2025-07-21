@@ -11,7 +11,6 @@ import { NextResponse } from 'next/server';
 
 // Working oEmbed endpoints (verified and tested)
 const WORKING_OEMBED_ENDPOINTS = {
-  twitter: 'https://publish.twitter.com/oembed',
   youtube: 'https://www.youtube.com/oembed',
   tiktok: 'https://www.tiktok.com/oembed',
   instagram: 'https://api.instagram.com/oembed/',
@@ -131,8 +130,6 @@ function detectPlatform(url) {
     return 'youtube';
   } else if (urlLower.includes('reddit.com')) {
     return 'reddit';
-  } else if (urlLower.includes('twitter.com') || urlLower.includes('x.com')) {
-    return 'twitter';
   } else if (urlLower.includes('tiktok.com')) {
     return 'tiktok';
   } else if (urlLower.includes('instagram.com')) {
@@ -145,7 +142,7 @@ function detectPlatform(url) {
 }
 
 function isPlatformWorking(platform) {
-  const workingPlatforms = ['youtube', 'reddit', 'twitter', 'tiktok', 'instagram', 'farcaster'];
+  const workingPlatforms = ['youtube', 'reddit', 'tiktok', 'instagram', 'farcaster'];
   return workingPlatforms.includes(platform);
 }
 
@@ -355,22 +352,89 @@ async function fetchFarcasterData(url) {
     const title = titleMatch?.[1] || 'Farcaster Cast';
     const description = descMatch?.[1] || '';
 
-    // Clean and simplify content
-    const cleanTitle = title.replace(/^Farcaster\s*-?\s*/, '').trim();
-    const cleanDescription = description.replace(/Farcaster is.*?$/, '').trim();
+    // Clean and process content
+    const cleanText = (text) => {
+      if (!text) return '';
+      return decodeHtmlEntities(text)
+        .replace(/^Farcaster\s*-?\s*/, '')
+        .replace(/\$(\w+)\s+on\s+Farcaster/, '$1')  // Clean up "$user on Farcaster" format
+        .replace(/Farcaster is.*?$/, '')
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>')
+        .replace(/&amp;/g, '&')
+        .replace(/^"(.+)"$/, '$1')  // Remove surrounding quotes
+        // Keep social mentions as is
+        .replace(/\s+/g, ' ')
+        .trim();
+    };
+
+    // Clean text from both sources
+    const cleanTitle = cleanText(title);
+    
+    // Only use description if it's different from title
+    const cleanDescription = title !== description ? cleanText(description) : '';
+
+    // Extract images more thoroughly
+    const images = [];
+    
+    // Add image from meta tag if present
+    if (imageMatch?.[1]) {
+      images.push(imageMatch[1]);
+    }
+    
+    // Look for all possible image URLs
+    const imagePatterns = [
+      // Direct image URLs in meta tags
+      /<meta[^>]+?content="(https:\/\/[^"]+?(?:\.(?:png|jpe?g|gif|webp)|\/original))"[^>]*>/g,
+      // Farcaster og-image URLs
+      /https:\/\/client\.farcaster\.xyz\/v2\/og-image\?[^\s"'<>]+/g,
+      // Imagedelivery.net URLs
+      /https:\/\/imagedelivery\.net\/[^\s"'<>]+\/original/g,
+      // General image URLs in content
+      /https:\/\/[^\s<>"]+?(?:\.(?:png|jpe?g|gif|webp)|\/original)(?:\s|$|")/gi,
+    ];
+
+    // Search through both HTML and text content
+    const searchContent = html + ' ' + cleanTitle + ' ' + cleanDescription;
+    
+    imagePatterns.forEach(pattern => {
+      const matches = searchContent.matchAll(pattern);
+      for (const match of matches) {
+        const url = match[1] || match[0];  // Use capture group if exists, otherwise full match
+        const cleanUrl = url.trim().replace(/["']/g, '');
+        if (!images.includes(cleanUrl)) {
+          images.push(cleanUrl);
+          console.log('🖼️ Found image:', cleanUrl);
+        }
+      }
+    });
 
     console.log('✅ Farcaster scraping success');
 
+    // Prepare final text by combining cleaned parts
+    let finalText = cleanTitle;
+    if (cleanDescription && cleanDescription !== cleanTitle) {
+      finalText += '\n\n' + cleanDescription;
+    }
+
+    // Log what we found
+    console.log('✅ Farcaster parsing results:', {
+      text: finalText,
+      author,
+      imageCount: images.length,
+      images
+    });
+
     return {
       platform: 'farcaster',
-      text: cleanTitle + (cleanDescription && cleanDescription !== cleanTitle ? '\n\n' + cleanDescription : ''),
+      text: finalText,
       author: {
         name: author,
         username: author,
         url: `https://farcaster.xyz/${author}`
       },
       url: farcasterUrl,
-      images: imageMatch?.[1] ? [imageMatch[1]] : [],
+      images: images,
       created_at: new Date().toISOString()
     };
     
@@ -468,21 +532,278 @@ async function fetchTikTokData(url) {
 
 async function fetchTwitterData(url) {
   try {
-    console.log('🐦 Fetching Twitter data via oEmbed first...');
+    console.log('🐦 Fetching Twitter/X data...');
     
-    // First try oEmbed (your working approach)
+    // Convert x.com URLs to twitter.com and extract tweet ID
+    const twitterUrl = url.replace('x.com', 'twitter.com');
+    const tweetId = url.match(/\/status\/(\d+)/)?.[1] || url.match(/\/([0-9]+)$/)?.[1];
+    
+    // Clean up URL format if needed
+    if (!tweetId) {
+      throw new Error('Invalid Twitter/X URL format - could not extract tweet ID');
+    }
+    
+    // Clean up potential twitter/x url variations
+    // const cleanUrl = `https://twitter.com/${url.split('/').slice(-3, -1).join('/')}/status/${tweetId}`;
+
+    // Try Twitter API v2 with guest token (most reliable method)
     try {
-      const oembedUrl = `${WORKING_OEMBED_ENDPOINTS.twitter}?url=${encodeURIComponent(url)}&format=json`;
-      
-      const response = await fetch(oembedUrl, {
+      // First get the guest token
+      const tokenResponse = await fetch('https://api.twitter.com/1.1/guest/activate.json', {
+        method: 'POST',
         headers: {
-          'User-Agent': 'LinkPreviewBot/1.0'
-        },
-        signal: AbortSignal.timeout(10000)
+          'Authorization': 'Bearer AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs=1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA',
+        }
       });
 
-      if (response.ok) {
-        const data = await response.json();
+      if (tokenResponse.ok) {
+        const tokenData = await tokenResponse.json();
+        const guestToken = tokenData.guest_token;
+
+        // Now fetch the tweet with the guest token - include referenced tweets and more media info
+        const tweetResponse = await fetch(`https://api.twitter.com/2/tweets/${tweetId}?expansions=attachments.media_keys,author_id,referenced_tweets.id,referenced_tweets.id.author_id&media.fields=url,preview_image_url,alt_text&tweet.fields=attachments,author_id,text,entities,referenced_tweets&user.fields=name,username,profile_image_url`, {
+          headers: {
+            'Authorization': 'Bearer AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs=1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA',
+            'x-guest-token': guestToken,
+          }
+        });
+
+        if (tweetResponse.ok) {
+          const tweetData = await tweetResponse.json();
+          console.log('✅ Twitter API v2 success:', tweetData);
+
+          const images = [];
+          
+          // Function to clean text
+          const cleanTweetText = (text) => {
+            if (!text) return '';
+            return decodeHtmlEntities(text)
+              .replace(/&amp;/g, '&')
+              .replace(/&#39;/g, "'")
+              .replace(/&quot;/g, '"')
+              .replace(/\b(https?:\/\/[^\s]+)$/, '') // Remove trailing URLs
+              .trim();
+          };
+
+          // Extract images from media attachments
+          if (tweetData.includes?.media) {
+            tweetData.includes.media.forEach(media => {
+              if (media.type === 'photo') {
+                if (media.url) {
+                  // Convert to highest quality
+                  const highQualityUrl = media.url
+                    .replace(/\?format=\w+/, '?format=jpg&name=4096x4096')
+                    .replace(/&name=\w+/, '&name=4096x4096');
+                  images.push(highQualityUrl);
+                } else if (media.preview_image_url) {
+                  const highQualityPreview = media.preview_image_url
+                    .replace(/\?format=\w+/, '?format=jpg&name=4096x4096')
+                    .replace(/&name=\w+/, '&name=4096x4096');
+                  images.push(highQualityPreview);
+                }
+              }
+            });
+          }
+          
+          // Also check entities for media
+          if (tweetData.data?.entities?.urls) {
+            tweetData.data.entities.urls.forEach(url => {
+              if (url.images && url.images.length > 0) {
+                url.images.forEach(img => {
+                  if (img.url) {
+                    images.push(img.url);
+                  }
+                });
+              }
+              // Check for pic.twitter.com URLs
+              if (url.expanded_url && url.expanded_url.includes('pic.twitter.com')) {
+                const mediaId = url.expanded_url.split('/').pop();
+                if (mediaId) {
+                  images.push(`https://pbs.twimg.com/media/${mediaId}?format=jpg&name=4096x4096`);
+                }
+              }
+            });
+          }
+
+          return {
+            platform: 'twitter',
+            text: cleanTweetText(tweetData.data?.text) || 'Twitter Post',
+            author: {
+              name: tweetData.includes?.users?.[0]?.name || 'Twitter User',
+              username: tweetData.includes?.users?.[0]?.username || 'unknown',
+              url: `https://twitter.com/${tweetData.includes?.users?.[0]?.username || 'unknown'}`
+            },
+            url: url,
+            images: images,
+            thumbnail: images[0] || null,
+            created_at: new Date().toISOString()
+          };
+        }
+      }
+    } catch (apiError) {
+      console.log('Twitter API v2 failed, trying syndication endpoint:', apiError.message);
+    }
+
+    // Try syndication endpoint as fallback
+    try {
+      const syndicationResponse = await fetch(`https://syndication.twitter.com/tweets.json?ids=${tweetId}`, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Accept': 'application/json',
+          'Origin': 'https://platform.twitter.com',
+          'Referer': 'https://platform.twitter.com/',
+        },
+        signal: AbortSignal.timeout(15000)
+      });
+
+      if (syndicationResponse.ok) {
+        const syndicationData = await syndicationResponse.json();
+        console.log('✅ Twitter syndication success:', syndicationData);
+        
+        // Extract images from syndication data
+        const syndicationImages = [];
+        
+        // Parse tweet data from syndication response
+        const tweets = syndicationData[tweetId];
+        if (tweets?.photos) {
+          tweets.photos.forEach(photo => {
+            // Get the highest quality version
+            const highQualityUrl = `https://pbs.twimg.com/media/${photo.id}?format=jpg&name=4096x4096`;
+            syndicationImages.push(highQualityUrl);
+          });
+        }
+        
+        // Also check for media entities
+        if (tweets?.entities?.media) {
+          tweets.entities.media.forEach(media => {
+            if (media.type === 'photo' && media.media_url_https) {
+              const highQualityUrl = media.media_url_https
+                .replace(/\?format=\w+/, '?format=jpg&name=4096x4096')
+                .replace(/&name=\w+/, '&name=4096x4096');
+              if (!syndicationImages.includes(highQualityUrl)) {
+                syndicationImages.push(highQualityUrl);
+              }
+            }
+          });
+        }
+        
+        if (syndicationImages.length > 0) {
+          return {
+            platform: 'twitter',
+            text: syndicationData.text || 'Twitter Post',
+            author: {
+              name: syndicationData.user?.name || 'Twitter User',
+              username: syndicationData.user?.screen_name || 'unknown',
+              url: `https://twitter.com/${syndicationData.user?.screen_name || 'unknown'}`
+            },
+            url: url,
+            images: syndicationImages,
+            thumbnail: syndicationImages[0] || null,
+            created_at: new Date().toISOString()
+          };
+        }
+      }
+    } catch (syndicationError) {
+      console.log('Twitter syndication failed, trying alternative methods:', syndicationError.message);
+    }
+    
+    // Try nitter.net as another alternative
+    try {
+      const nitterResponse = await fetch(`https://nitter.net/${url.split('/status/')[0].split('.com/')[1]}/status/${tweetId}`, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8'
+        },
+        signal: AbortSignal.timeout(15000)
+      });
+
+      if (nitterResponse.ok) {
+        const nitterHtml = await nitterResponse.text();
+        const nitterImages = [];
+        
+        // Extract images from nitter HTML
+        const nitterImageMatches = nitterHtml.match(/https:\/\/nitter\.net\/pic\/[^\s"'<>]+/g);
+        if (nitterImageMatches) {
+          nitterImageMatches.forEach(imgUrl => {
+            // Convert nitter URLs to Twitter URLs
+            const twitterImgUrl = imgUrl
+              .replace('nitter.net/pic', 'pbs.twimg.com/media')
+              .replace(/\?.*$/, '?format=jpg&name=4096x4096');
+            nitterImages.push(twitterImgUrl);
+          });
+          
+          if (nitterImages.length > 0) {
+            // Extract text and author from nitter
+            const nitterText = nitterHtml.match(/<div class="tweet-content[^>]*>(.*?)<\/div>/s)?.[1]?.trim() || 'Twitter Post';
+            const nitterAuthor = nitterHtml.match(/<a class="username"[^>]*>@([^<]+)<\/a>/)?.[1] || 'unknown';
+            
+            return {
+              platform: 'twitter',
+              text: nitterText,
+              author: {
+                name: nitterAuthor,
+                username: nitterAuthor,
+                url: `https://twitter.com/${nitterAuthor}`
+              },
+              url: url,
+              images: nitterImages,
+              thumbnail: nitterImages[0] || null,
+              created_at: new Date().toISOString()
+            };
+          }
+        }
+      }
+    } catch (nitterError) {
+      console.log('Nitter fetch failed, trying next method:', nitterError.message);
+    }
+    
+    // If both syndication and nitter failed, try direct page fetch with enhanced headers
+    const pageResponse = await fetch(twitterUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'Cache-Control': 'max-age=0',
+        'Sec-Ch-Ua': '"Not A(Brand";v="99", "Google Chrome";v="121", "Chromium";v="121"',
+        'Sec-Ch-Ua-Mobile': '?0',
+        'Sec-Ch-Ua-Platform': '"Windows"',
+        'Sec-Fetch-Dest': 'document',
+        'Sec-Fetch-Mode': 'navigate',
+        'Sec-Fetch-Site': 'none',
+        'Sec-Fetch-User': '?1',
+        'Upgrade-Insecure-Requests': '1',
+        'Connection': 'keep-alive'
+      },
+      redirect: 'follow',
+      referrerPolicy: 'strict-origin-when-cross-origin',
+      credentials: 'include'
+    });
+
+    // Don't throw error immediately, try alternative methods
+    if (!pageResponse.ok) {
+      console.log('🐦 Direct page fetch failed, trying alternative methods...');
+    }
+    
+    // Try oEmbed with enhanced headers and better error handling
+    try {
+      const oembedUrl = `${WORKING_OEMBED_ENDPOINTS.twitter}?url=${encodeURIComponent(url)}&format=json&maxwidth=1000&maxheight=1000&dnt=true`;
+      
+      const oembedResponse = await fetch(oembedUrl, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Accept': 'application/json',
+          'Origin': 'https://twitter.com',
+          'Referer': 'https://twitter.com/',
+          'Sec-Fetch-Dest': 'empty',
+          'Sec-Fetch-Mode': 'cors',
+          'Sec-Fetch-Site': 'cross-site'
+        },
+        signal: AbortSignal.timeout(15000)
+      });
+
+      if (oembedResponse.ok) {
+        const data = await oembedResponse.json();
         console.log('✅ Twitter oEmbed success:', data);
 
         // Extract actual tweet content from HTML
@@ -526,19 +847,54 @@ async function fetchTwitterData(url) {
             }
           }
           
-          // Extract images from HTML - look for img tags
-          const imgMatches = data.html.match(/<img[^>]+src="([^"]+)"/g);
+          // Enhanced image extraction from tweet text and HTML
+          const mediaRegex = /https:\/\/t\.co\/([a-zA-Z0-9]+)/g;
+          const mediaMatches = tweetText.match(mediaRegex);
+          
+          if (mediaMatches) {
+            mediaMatches.forEach(mediaUrl => {
+              const mediaId = mediaUrl.split('/').pop();
+              // Try multiple formats for each media ID
+              const possibleUrls = [
+                `https://pbs.twimg.com/media/${mediaId}?format=jpg&name=large`,
+                `https://pbs.twimg.com/media/${mediaId}?format=png&name=large`,
+                `https://pbs.twimg.com/media/${mediaId}?format=jpg&name=4096x4096`,
+                `https://pbs.twimg.com/media/${mediaId}.jpg`,
+                `https://pbs.twimg.com/media/${mediaId}.png`
+              ];
+              
+              possibleUrls.forEach(url => {
+                if (!images.includes(url)) {
+                  images.push(url);
+                }
+              });
+            });
+          }
+
+          // Extract images from HTML
+          const imgMatches = data.html.match(/<img[^>]+src="([^"]+)"[^>]*>/g);
           if (imgMatches) {
-            images = imgMatches.map(match => {
+            imgMatches.forEach(match => {
               const srcMatch = match.match(/src="([^"]+)"/);
-              return srcMatch ? srcMatch[1] : null;
-            }).filter(Boolean);
+              if (srcMatch && srcMatch[1]) {
+                const imgUrl = srcMatch[1];
+                if (!images.includes(imgUrl) && !imgUrl.includes('emoji') && !imgUrl.includes('favicon')) {
+                  images.push(imgUrl);
+                }
+              }
+            });
           }
         }
 
-        // Also check thumbnail_url
-        if (data.thumbnail_url && !images.includes(data.thumbnail_url)) {
-          images.push(data.thumbnail_url);
+        // Check thumbnail_url and convert to high quality if possible
+        if (data.thumbnail_url) {
+          const highQualityUrl = data.thumbnail_url
+            .replace(/\?format=\w+/, '?format=jpg&name=4096x4096')
+            .replace(/&name=\w+/, '&name=4096x4096');
+          
+          if (!images.includes(highQualityUrl)) {
+            images.push(highQualityUrl);
+          }
         }
         
         console.log('🐦 Extracted text:', tweetText);
@@ -565,48 +921,132 @@ async function fetchTwitterData(url) {
     // Fallback to scraping with your working headers
     console.log('🐦 Trying Twitter scraping fallback...');
     
-    const response = await fetch(url, {
-      headers: SCRAPING_HEADERS,
-      signal: AbortSignal.timeout(10000)
+    // Try fallback to scraping with enhanced headers and better bot evasion
+    const scrapingResponse = await fetch(url, {
+      headers: {
+        ...SCRAPING_HEADERS,
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'Cache-Control': 'no-cache',
+        'Pragma': 'no-cache',
+        'Sec-Ch-Ua': '"Not A(Brand";v="99", "Google Chrome";v="121", "Chromium";v="121"',
+        'Sec-Ch-Ua-Mobile': '?0',
+        'Sec-Ch-Ua-Platform': '"Windows"',
+        'Sec-Fetch-Dest': 'document',
+        'Sec-Fetch-Mode': 'navigate',
+        'Sec-Fetch-Site': 'none',
+        'Sec-Fetch-User': '?1',
+        'Upgrade-Insecure-Requests': '1'
+      },
+      redirect: 'follow',
+      referrerPolicy: 'strict-origin-when-cross-origin',
+      credentials: 'include',
+      signal: AbortSignal.timeout(15000) // Increased timeout
     });
 
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`);
+    if (!scrapingResponse.ok) {
+      // If all methods fail, try to extract info from the URL itself
+      const tweetUrlMatch = url.match(/twitter\.com\/([^\/]+)\/status\/(\d+)/);
+      if (tweetUrlMatch) {
+        const [, username, tweetId] = tweetUrlMatch;
+        console.log('🐦 Falling back to URL-based extraction:', { username, tweetId });
+        
+        return {
+          platform: 'twitter',
+          text: 'Twitter Post',
+          author: {
+            name: username,
+            username: username,
+            url: `https://twitter.com/${username}`
+          },
+          url: url,
+          images: [],
+          thumbnail: null,
+          created_at: new Date().toISOString(),
+          note: 'Limited information available due to Twitter restrictions'
+        };
+      }
+      throw new Error(`Failed to access tweet content (HTTP ${scrapingResponse.status}). Twitter may be blocking automated access.`);
     }
 
-    const html = await response.text();
-    console.log('Twitter response status:', response.status);
-    console.log('🐦 Twitter HTML length:', html.length);
-    console.log('🐦 Twitter HTML sample:', html.slice(0, 500));
+    const scrapedHtml = await scrapingResponse.text();
+    console.log('Twitter response status:', scrapingResponse.status);
+    console.log('🐦 Twitter HTML length:', scrapedHtml.length);
+    console.log('🐦 Twitter HTML sample:', scrapedHtml.slice(0, 500));
     
-    // Extract content more carefully
-    const titleMatch = html.match(/<meta property="og:title" content="([^"]*)"/) ||
-                      html.match(/<meta name="twitter:title" content="([^"]*)"/) ||
-                      html.match(/<title>([^<]*)<\/title>/);
+    // Extract content more carefully from the scraped HTML
+    const titleMatch = scrapedHtml.match(/<meta property="og:title" content="([^"]*)"/) ||
+                      scrapedHtml.match(/<meta name="twitter:title" content="([^"]*)"/) ||
+                      scrapedHtml.match(/<title>([^<]*)<\/title>/);
     
-    const descMatch = html.match(/<meta property="og:description" content="([^"]*)"/) ||
-                     html.match(/<meta name="twitter:description" content="([^"]*)"/) ||
-                     html.match(/<meta name="description" content="([^"]*)"/);
+    const descMatch = scrapedHtml.match(/<meta property="og:description" content="([^"]*)"/) ||
+                     scrapedHtml.match(/<meta name="twitter:description" content="([^"]*)"/) ||
+                     scrapedHtml.match(/<meta name="description" content="([^"]*)"/);
     
-    const imageMatch = html.match(/<meta property="og:image" content="([^"]*)"/) ||
-                      html.match(/<meta name="twitter:image" content="([^"]*)"/);
-    
-    // Extract multiple images with more aggressive approach
+    // Initialize images array and helper functions
     let images = [];
-    
-    // Method 1: Twitter card images (numbered)
-    const twitterImageMatches = html.match(/<meta name="twitter:image\d*" content="([^"]*)"/g);
-    if (twitterImageMatches) {
-      const twitterImages = twitterImageMatches.map(match => {
-        const urlMatch = match.match(/content="([^"]*)"/);
-        return urlMatch ? urlMatch[1] : null;
-      }).filter(Boolean);
-      images.push(...twitterImages);
+
+    // Helper function to convert URL to high quality
+    const toHighQuality = (url) => {
+      if (!url) return null;
+      return url
+        .replace(/\?format=\w+/, '?format=jpg&name=4096x4096')
+        .replace(/&name=\w+/, '&name=4096x4096')
+        .replace(/name=\w+/, 'name=4096x4096');
+    };
+
+    // Helper function to add unique image
+    const addUniqueImage = (url) => {
+      if (url && !images.includes(url) && !url.includes('emoji') && !url.includes('favicon')) {
+        images.push(url);
+      }
+    };
+
+    // 1. Extract from meta tags
+    const metaImages = scrapedHtml.match(/<meta[^>]+(twitter:image\d*|og:image)[^>]+content="([^"]*)"[^>]*>/g);
+    if (metaImages) {
+      metaImages.forEach(meta => {
+        const urlMatch = meta.match(/content="([^"]*)"/);
+        if (urlMatch) {
+          const url = decodeHtmlEntities(urlMatch[1]);
+          addUniqueImage(toHighQuality(url));
+        }
+      });
     }
-    
-    // Method 2: OG image
-    if (imageMatch?.[1] && !images.includes(imageMatch[1])) {
-      images.push(imageMatch[1]);
+
+    // 2. Extract from t.co URLs
+    const tcoLinks = scrapedHtml.match(/https:\/\/t\.co\/[A-Za-z0-9]+/g);
+    if (tcoLinks) {
+      tcoLinks.forEach(link => {
+        const mediaId = link.split('/').pop();
+        [
+          `https://pbs.twimg.com/media/${mediaId}?format=jpg&name=4096x4096`,
+          `https://pbs.twimg.com/media/${mediaId}?format=png&name=4096x4096`,
+          `https://pbs.twimg.com/media/${mediaId}.jpg`
+        ].forEach(addUniqueImage);
+      });
+    }
+
+    // 3. Extract from pic.twitter.com URLs
+    const picTwitterLinks = scrapedHtml.match(/pic\.twitter\.com\/[A-Za-z0-9]+/g);
+    if (picTwitterLinks) {
+      picTwitterLinks.forEach(link => {
+        const mediaId = link.split('/').pop();
+        [
+          `https://pbs.twimg.com/media/${mediaId}?format=jpg&name=4096x4096`,
+          `https://pbs.twimg.com/media/${mediaId}.jpg`
+        ].forEach(addUniqueImage);
+      });
+    }
+
+    // 4. Extract direct pbs.twimg.com URLs
+    const pbsImages = html.match(/https:\/\/pbs\.twimg\.com\/media\/[A-Za-z0-9_-]+\.(jpg|png)/g);
+    if (pbsImages) {
+      pbsImages.forEach(url => {
+        addUniqueImage(toHighQuality(url));
+      });
     }
     
     // Method 3: Look for pic.twitter.com in content and try to extract actual image URLs
@@ -633,15 +1073,49 @@ async function fetchTwitterData(url) {
       });
       
       // Try to find corresponding full image URLs in meta tags or JSON-LD
-      const jsonLdMatch = html.match(/<script type="application\/ld\+json"[^>]*>(.*?)<\/script>/s);
-      if (jsonLdMatch) {
+      // Enhanced JSON-LD extraction with multiple schema support
+      const jsonLdMatches = html.matchAll(/<script[^>]+type="application\/ld\+json"[^>]*>(.*?)<\/script>/gs);
+      for (const match of jsonLdMatches) {
         try {
-          const jsonData = JSON.parse(jsonLdMatch[1]);
+          const jsonData = JSON.parse(match[1]);
           console.log('🐦 Found JSON-LD data:', jsonData);
-          if (jsonData.image) {
-            const imageUrl = Array.isArray(jsonData.image) ? jsonData.image[0] : jsonData.image;
-            if (imageUrl && !images.includes(imageUrl)) {
-              images.push(imageUrl);
+          
+          // Handle multiple schema types
+          if (Array.isArray(jsonData)) {
+            jsonData.forEach(item => extractImagesFromJsonLd(item));
+          } else {
+            extractImagesFromJsonLd(jsonData);
+          }
+          
+          function extractImagesFromJsonLd(data) {
+            // Extract from image field
+            if (data.image) {
+              const imageUrls = Array.isArray(data.image) ? data.image : [data.image];
+              imageUrls.forEach(url => {
+                if (typeof url === 'string' && !images.includes(url)) {
+                  const enhancedUrl = url
+                    .replace(/\?format=\w+/, '?format=jpg&name=4096x4096')
+                    .replace(/&name=\w+/, '&name=4096x4096');
+                  images.push(enhancedUrl);
+                } else if (url?.url && !images.includes(url.url)) {
+                  const enhancedUrl = url.url
+                    .replace(/\?format=\w+/, '?format=jpg&name=4096x4096')
+                    .replace(/&name=\w+/, '&name=4096x4096');
+                  images.push(enhancedUrl);
+                }
+              });
+            }
+            
+            // Look for images in other fields
+            if (data.thumbnailUrl && !images.includes(data.thumbnailUrl)) {
+              images.push(data.thumbnailUrl);
+            }
+            
+            // Handle nested schemas
+            if (data.associatedMedia?.['@type'] === 'ImageObject' && data.associatedMedia.url) {
+              if (!images.includes(data.associatedMedia.url)) {
+                images.push(data.associatedMedia.url);
+              }
             }
           }
         } catch (e) {
@@ -663,30 +1137,46 @@ async function fetchTwitterData(url) {
     
     console.log('🐦 All extracted images:', images);
     
-    const authorMatch = html.match(/<meta name="twitter:creator" content="([^"]*)"/);
-
-    // Clean the content
-    let cleanText = '';
-    if (descMatch?.[1] && descMatch[1] !== titleMatch?.[1]) {
-      cleanText = descMatch[1];
-    } else if (titleMatch?.[1]) {
-      cleanText = titleMatch[1];
+    // Extract author information
+    const authorPatterns = [
+      /<meta name="twitter:creator" content="([^"]*)"/,
+      /<meta property="og:title" content="([^"]*?) on Twitter"/,
+      /<a[^>]+href="https:\/\/twitter\.com\/([^"\/]+)"[^>]*>/
+    ];
+    
+    let foundAuthor = null;
+    for (const pattern of authorPatterns) {
+      const match = html.match(pattern);
+      if (match && match[1]) {
+        foundAuthor = match[1].replace('@', '');
+        break;
+      }
     }
     
-    // Remove "on Twitter" or similar suffixes
-    cleanText = cleanText.replace(/\s*on Twitter.*?$/, '').trim();
+    // Clean and extract the text content
+    let foundText = '';
+    if (descMatch?.[1] && descMatch[1] !== titleMatch?.[1]) {
+      foundText = decodeHtmlEntities(descMatch[1]);
+    } else if (titleMatch?.[1]) {
+      foundText = decodeHtmlEntities(titleMatch[1]);
+    }
     
-    const author = authorMatch?.[1]?.replace('@', '') || 'Twitter User';
+    // Clean up the text
+    foundText = foundText
+      .replace(/\s*on Twitter.*?$/, '')
+      .replace(/^"/, '')
+      .replace(/"$/, '')
+      .trim();
 
     console.log('✅ Twitter scraping success');
 
     return {
       platform: 'twitter',
-      text: cleanText || 'Twitter Post',
+      text: foundText || 'Twitter Post',
       author: {
-        name: author,
-        username: author,
-        url: url
+        name: foundAuthor || 'Twitter User',
+        username: foundAuthor || 'unknown',
+        url: `https://twitter.com/${foundAuthor || 'unknown'}`
       },
       url: url,
       images: images,

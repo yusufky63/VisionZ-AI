@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import {
   useAccount,
   usePublicClient,
@@ -14,10 +14,11 @@ import {
   validateTradeBalance,
   checkTokenBalance,
 } from "../../services/sdk/getTradeCoin";
+import { searchTokenByAddress } from "../../services/sdk/getCoins";
 import { toast } from "react-hot-toast";
 import { useRouter } from "next/navigation";
 
-function TradePanel({ coin, ethPrice }) {
+function TradePanel({ coin, ethPrice, tokens = [], onSelectToken }) {
   const [amount, setAmount] = useState("0.01");
   const [tradeType, setTradeType] = useState("buy");
   const [loading, setLoading] = useState(false);
@@ -28,6 +29,11 @@ function TradePanel({ coin, ethPrice }) {
   const [estimatedTokensToReceive, setEstimatedTokensToReceive] = useState("0");
   const [tokenPrice, setTokenPrice] = useState(null);
   const [slippage, setSlippage] = useState(0.05);
+  const [showTokenDropdown, setShowTokenDropdown] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [sortBy, setSortBy] = useState("value");
+  const [globalSearchResults, setGlobalSearchResults] = useState([]);
+  const [isSearching, setIsSearching] = useState(false);
 
   const { theme } = useTheme();
   const { address, isConnected } = useAccount();
@@ -53,12 +59,25 @@ function TradePanel({ coin, ethPrice }) {
       const marketCap = parseFloat(coin.marketCap);
       const totalSupply = parseFloat(coin.totalSupply);
       
-      if (marketCap > 0 && totalSupply > 0) {
-        const price = marketCap / totalSupply;
+      if (marketCap > 0 && totalSupply > 0 && ethPrice > 0) {
+        // If marketCap is in wei (very large number), convert to ETH first then to USD
+        let marketCapInUSD;
+        if (marketCap > 1e15) { // If marketCap seems to be in wei format (very large)
+          // Convert from wei to ETH, then ETH to USD
+          const marketCapInEth = marketCap / 1e18; // Convert wei to ETH
+          marketCapInUSD = marketCapInEth * ethPrice; // Convert ETH to USD
+        } else {
+          // Assume marketCap is already in USD
+          marketCapInUSD = marketCap;
+        }
+        
+        // Calculate token price in USD
+        const tokenSupply = totalSupply > 1e15 ? totalSupply / 1e18 : totalSupply; // Handle supply in wei format too
+        const price = marketCapInUSD / tokenSupply;
         setTokenPrice(price);
       }
     }
-  }, [coin]);
+  }, [coin, ethPrice]);
 
   // Load token balance and ETH balance
   useEffect(() => {
@@ -99,6 +118,58 @@ function TradePanel({ coin, ethPrice }) {
     // Clean up the interval when component unmounts
     return () => clearInterval(refreshInterval);
   }, [isConnected, address, publicClient, coin?.address, ethBalanceData]);
+
+  // Global token search function
+  const performGlobalSearch = async (query) => {
+    if (!query || query.length < 2) {
+      setGlobalSearchResults([]);
+      return;
+    }
+
+    setIsSearching(true);
+    try {
+      // Check if it's an Ethereum address
+      const isEthereumAddress = /^0x[a-fA-F0-9]{40}$/.test(query);
+      
+      if (isEthereumAddress) {
+        const result = await searchTokenByAddress(query);
+        
+        if (result.success && result.data) {
+          setGlobalSearchResults([{
+            id: query,
+            name: result.data.name || 'Unknown Token',
+            symbol: result.data.symbol || '???',
+            address: query,
+            marketCap: result.data.marketCap || 0,
+            totalSupply: result.data.totalSupply || 0,
+            totalVolume: result.data.totalVolume || 0,
+            mediaContent: result.data.mediaContent,
+            type: 'global'
+          }]);
+        } else {
+          setGlobalSearchResults([]);
+        }
+      } else {
+        // For name/symbol search, we'll search through existing tokens first
+        // Future: Could be extended to search through a larger database
+        setGlobalSearchResults([]);
+      }
+    } catch (error) {
+      console.error("Global search error:", error);
+      setGlobalSearchResults([]);
+    } finally {
+      setIsSearching(false);
+    }
+  };
+
+  // Debounced global search
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      performGlobalSearch(searchQuery);
+    }, 500);
+
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
 
   // Calculate amount based on slider percentage
   const calculatePercentage = (balance, percentage) => {
@@ -328,13 +399,14 @@ function TradePanel({ coin, ethPrice }) {
     return (value / 1000000000).toFixed(2) + "B";
   };
 
-  // Format token balance with appropriate abbreviations
-  const formatTokenBalance = (balanceStr) => {
+  // Enhanced balance formatting with proper handling
+  const formatBalance = (balanceStr) => {
     if (!balanceStr) return "0";
     
     try {
-      // Check if this is a very large string number (with many leading zeros)
       let balance;
+      
+      // Check if this is a very large string number (with many leading zeros)
       if (typeof balanceStr === 'string' && balanceStr.length > 30) {
         // Convert properly using formatEther for wei values
         try {
@@ -348,6 +420,7 @@ function TradePanel({ coin, ethPrice }) {
       
       if (isNaN(balance) || balance === 0) return "0";
       
+      // Format with appropriate precision based on size
       if (balance < 0.0001) return balance.toExponential(4);
       if (balance < 1) return balance.toFixed(6);
       if (balance < 10) return balance.toFixed(4);
@@ -356,9 +429,14 @@ function TradePanel({ coin, ethPrice }) {
       if (balance < 1000000000) return (balance / 1000000).toFixed(2) + "M";
       return (balance / 1000000000).toFixed(2) + "B";
     } catch (e) {
-      console.error("Error formatting token balance:", e);
+      console.error("Error formatting balance:", e);
       return "0";
     }
+  };
+
+  // Format token balance with appropriate abbreviations (kept for backward compatibility)
+  const formatTokenBalance = (balanceStr) => {
+    return formatBalance(balanceStr);
   };
   
   // Format token symbol to handle unusually long symbols
@@ -378,6 +456,178 @@ function TradePanel({ coin, ethPrice }) {
   const handleViewCoinDetails = () => {
     router.push(`/coin/${coin.address}`);
   };
+
+  // Handle token selection
+  const handleTokenSelect = (selectedToken) => {
+    if (onSelectToken) {
+      onSelectToken(selectedToken);
+    }
+    setShowTokenDropdown(false);
+    setSearchQuery(""); // Clear search after selection
+    setGlobalSearchResults([]); // Clear global search results
+  };
+
+  // Helper function to format token price with better precision
+  const formatTokenPrice = (price) => {
+    if (!price || isNaN(price) || price === 0) return "0";
+    
+    if (price < 0.000001) {
+      // Use scientific notation for very small prices
+      return price.toExponential(2);
+    } else if (price < 0.001) {
+      // Show 6 decimal places for small prices
+      return price.toFixed(6);
+    } else if (price < 0.01) {
+      // Show 5 decimal places 
+      return price.toFixed(5);
+    } else if (price < 0.1) {
+      // Show 4 decimal places
+      return price.toFixed(4);
+    } else if (price < 1) {
+      // Show 3 decimal places
+      return price.toFixed(3);
+    } else if (price < 10) {
+      // Show 2 decimal places
+      return price.toFixed(2);
+    } else {
+      // Show 2 decimal places for higher prices
+      return price.toFixed(2);
+    }
+  };
+
+  // Helper function to calculate token price in USD
+  const calculateTokenPrice = (tokenData) => {
+    if (!tokenData?.marketCap || !tokenData?.totalSupply || !ethPrice) {
+      return 0;
+    }
+    
+    // Check if volume is 0 - if it is, token hasn't been traded yet
+    if (!tokenData.totalVolume || parseFloat(tokenData.totalVolume) === 0) {
+      return 0;
+    }
+    
+    const marketCap = parseFloat(tokenData.marketCap);
+    const totalSupply = parseFloat(tokenData.totalSupply);
+    
+    if (marketCap > 0 && totalSupply > 0) {
+      // If marketCap is in wei (very large number), convert to ETH first then to USD
+      let marketCapInUSD;
+      if (marketCap > 1e15) { // If marketCap seems to be in wei format (very large)
+        // Convert from wei to ETH, then ETH to USD
+        const marketCapInEth = marketCap / 1e18; // Convert wei to ETH
+        marketCapInUSD = marketCapInEth * ethPrice; // Convert ETH to USD
+      } else {
+        // Assume marketCap is already in USD
+        marketCapInUSD = marketCap;
+      }
+      
+      // Calculate token price in USD
+      const tokenSupply = totalSupply > 1e15 ? totalSupply / 1e18 : totalSupply; // Handle supply in wei format too
+      return marketCapInUSD / tokenSupply;
+    }
+    
+    return 0;
+  };
+
+  // Enhanced token value calculation with better formatting - FIXED USD calculation
+  const calculateTokenValue = (token) => {
+    const tokenData = token.node?.coin;
+    const balance = parseFloat(token.node?.balance || "0");
+    
+    if (!tokenData?.marketCap || !tokenData?.totalSupply || balance === 0) {
+      return 0;
+    }
+    
+    // Check if volume is 0 - if it is, token hasn't been traded yet
+    if (!tokenData.totalVolume || parseFloat(tokenData.totalVolume) === 0) {
+      return 0;
+    }
+    
+    const marketCap = parseFloat(tokenData.marketCap);
+    const totalSupply = parseFloat(tokenData.totalSupply);
+    
+    if (marketCap > 0 && totalSupply > 0 && ethPrice > 0) {
+      // If marketCap is in wei (very large number), convert to ETH first then to USD
+      let marketCapInUSD;
+      if (marketCap > 1e15) { // If marketCap seems to be in wei format (very large)
+        // Convert from wei to ETH, then ETH to USD
+        const marketCapInEth = marketCap / 1e18; // Convert wei to ETH
+        marketCapInUSD = marketCapInEth * ethPrice; // Convert ETH to USD
+      } else {
+        // Assume marketCap is already in USD
+        marketCapInUSD = marketCap;
+      }
+      
+      // Calculate token price in USD
+      const tokenSupply = totalSupply > 1e15 ? totalSupply / 1e18 : totalSupply; // Handle supply in wei format too
+      const tokenPriceInUSD = marketCapInUSD / tokenSupply;
+      
+      // Calculate user's token value
+      const userBalance = balance > 1e15 ? balance / 1e18 : balance; // Handle balance in wei format too
+      return tokenPriceInUSD * userBalance;
+    }
+    
+    return 0;
+  };
+
+  // Format USD value with better precision - FIXED
+  const formatUSDValue = (value) => {
+    if (!value || isNaN(value)) return "$0.00";
+    
+    if (value < 0.01) return value < 0.001 ? "$<0.001" : `$${value.toFixed(3)}`;
+    if (value < 1) return `$${value.toFixed(3)}`;
+    if (value < 1000) return `$${value.toFixed(2)}`;
+    if (value < 1000000) return `$${(value / 1000).toFixed(2)}K`;
+    if (value < 1000000000) return `$${(value / 1000000).toFixed(2)}M`;
+    return `$${(value / 1000000000).toFixed(2)}B`;
+  };
+
+  // Filter and sort tokens based on search query and sort method
+  const filteredAndSortedTokens = useMemo(() => {
+    if (!tokens || tokens.length === 0) return [];
+    
+    // Filter based on search query
+    let filtered = tokens;
+    if (searchQuery.trim() && globalSearchResults.length === 0) {
+      const query = searchQuery.toLowerCase().trim();
+      filtered = tokens.filter(token => {
+        const tokenData = token.node?.coin;
+        return (
+          tokenData?.name?.toLowerCase().includes(query) ||
+          tokenData?.symbol?.toLowerCase().includes(query) ||
+          tokenData?.address?.toLowerCase().includes(query)
+        );
+      });
+    }
+    
+    // Sort based on selected sort method
+    return filtered.sort((a, b) => {
+      if (sortBy === "value") {
+        return calculateTokenValue(b) - calculateTokenValue(a); // Descending value
+      } else if (sortBy === "name") {
+        return (a.node?.coin?.name || "").localeCompare(b.node?.coin?.name || "");
+      } else if (sortBy === "balance") {
+        const aBalance = parseFloat(a.node?.balance || "0");
+        const bBalance = parseFloat(b.node?.balance || "0");
+        return bBalance - aBalance; // Descending balance
+      }
+      return 0;
+    });
+  }, [tokens, searchQuery, sortBy, globalSearchResults]);
+
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (showTokenDropdown && !event.target.closest('.token-dropdown-container')) {
+        setShowTokenDropdown(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [showTokenDropdown]);
 
   if (!coin) {
     return (
@@ -441,67 +691,405 @@ function TradePanel({ coin, ethPrice }) {
           transform: scale(1.2);
           box-shadow: 0 0 0 3px ${theme === "light" ? "rgba(99, 102, 241, 0.2)" : "rgba(129, 140, 248, 0.2)"};
         }
+
+        .dropdown-scrollbar::-webkit-scrollbar {
+          width: 6px;
+        }
+        
+        .dropdown-scrollbar::-webkit-scrollbar-track {
+          background: ${theme === "light" ? "#f1f5f9" : "#374151"};
+          border-radius: 10px;
+        }
+        
+        .dropdown-scrollbar::-webkit-scrollbar-thumb {
+          background: ${theme === "light" ? "#cbd5e1" : "#6b7280"};
+          border-radius: 10px;
+        }
+        
+        .dropdown-scrollbar::-webkit-scrollbar-thumb:hover {
+          background: ${theme === "light" ? "#94a3b8" : "#9ca3af"};
+        }
       `}</style>
 
-      {/* Token Header */}
-      <div className={`p-4 border-b ${
-        theme === "light" ? "border-gray-200/50" : "border-gray-700/30"
-      }`}>
-        <div className="flex items-center">
-          <div className="flex-shrink-0 mr-3">
-            {coin?.mediaContent?.previewImage?.small ? (
-              <img
-                src={coin.mediaContent.previewImage.small}
-                alt={coin.name || "Token"}
-                className="w-12 h-12 rounded-full object-cover shadow-sm"
-                onError={(e) => {
-                  e.target.onerror = null;
-                  e.target.src = `https://via.placeholder.com/48/6366f1/FFFFFF?text=${coin?.symbol?.slice(0, 1) || "?"}`
-                }}
-              />
-            ) : (
-              <div className={`w-12 h-12 rounded-full flex items-center justify-center shadow-sm ${
-                theme === "light" ? "bg-indigo-100 text-indigo-700" : "bg-indigo-900/30 text-indigo-400"
-              }`}>
-                <span className="text-xl font-bold">
-                  {coin?.symbol?.slice(0, 1) || "?"}
-                </span>
-              </div>
-            )}
-          </div>
-          
-          <div className="flex-1">
-            <div className="flex items-center">
-              <h2 className={`text-lg font-medium ${theme === "light" ? "text-gray-900" : "text-white"}`}>
-                {coin.name || "Unknown Token"}
-              </h2>
-              <span className="ml-2 px-2 py-0.5 text-xs rounded-full bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400">
-                {formatSymbol(coin.symbol || "---")}
-              </span>
-            </div>
-            
-            <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1">
-              <span className={`text-sm font-medium ${
-                theme === "light" ? "text-gray-900" : "text-white"
-              }`}>
-                {tokenPrice ? `$${tokenPrice < 0.01 ? "<0.01" : tokenPrice.toFixed(2)}` : "N/A"}
-              </span>
-              <span className="text-xs text-gray-500">•</span>
-              <span className="text-xs text-gray-500">
-                MCap: ${formatLargeNumber(coin.marketCap || 0)}
-              </span>
-              <button 
-                onClick={handleViewCoinDetails}
-                className="ml-auto text-xs px-2 py-0.5 rounded-md bg-indigo-50 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-100 dark:hover:bg-indigo-800/40 transition-colors"
-              >
-                Details
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-
       <div className="p-4">
+        {/* Modern Token Selection with Enhanced Dropdown */}
+        <div className="token-dropdown-container relative mb-4">
+          <div 
+            className={`p-3 rounded-xl border cursor-pointer transition-all duration-200 ${
+              theme === "light" 
+                ? "bg-gray-50 border-gray-200 hover:bg-gray-100 hover:border-gray-300" 
+                : "bg-gray-800/30 border-gray-700/30 hover:bg-gray-700/40 hover:border-gray-600/50"
+            } ${showTokenDropdown ? 
+              theme === "light" 
+                ? 'ring-2 ring-indigo-500/20 border-indigo-300 bg-indigo-50/30' 
+                : 'ring-2 ring-indigo-500/20 border-indigo-600/50 bg-indigo-900/20' 
+              : ''}`} 
+            onClick={() => setShowTokenDropdown(!showTokenDropdown)}
+          >
+            <div className="flex items-center justify-between">
+              <div className="flex items-center">
+                <div className="flex-shrink-0 mr-3">
+                  {coin?.mediaContent?.previewImage?.small ? (
+                    <img
+                      src={coin.mediaContent.previewImage.small}
+                      alt={coin.name || "Token"}
+                      className="w-8 h-8 rounded-full object-cover ring-2 ring-white dark:ring-gray-700"
+                      onError={(e) => {
+                        e.target.onerror = null;
+                        e.target.src = `https://via.placeholder.com/32/6366f1/FFFFFF?text=${coin?.symbol?.slice(0, 1) || "?"}`
+                      }}
+                    />
+                  ) : (
+                    <div className={`w-8 h-8 rounded-full flex items-center justify-center ring-2 ring-white dark:ring-gray-700 ${
+                      theme === "light" ? "bg-indigo-100 text-indigo-700" : "bg-indigo-900/30 text-indigo-400"
+                    }`}>
+                      <span className="text-sm font-bold">
+                        {coin?.symbol?.slice(0, 1) || "?"}
+                      </span>
+                    </div>
+                  )}
+                </div>
+                
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center">
+                    <h3 className={`text-sm font-semibold truncate ${theme === "light" ? "text-gray-900" : "text-white"}`}>
+                      {coin.name || "Unknown Token"}
+                    </h3>
+                    <span className="ml-2 px-2 py-0.5 text-xs rounded-full bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400 font-medium">
+                      {formatSymbol(coin.symbol || "---")}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-3 mt-0.5">
+                    <div className={`text-xs font-semibold ${theme === "light" ? "text-gray-900" : "text-white"}`}>
+                      {tokenPrice ? `$${formatTokenPrice(tokenPrice)}` : "N/A"}
+                    </div>
+                    <div className="text-xs text-gray-500">
+                      MCap: ${formatLargeNumber((() => {
+                        const marketCap = parseFloat(coin.marketCap || 0);
+                        if (marketCap > 1e15) {
+                          return (marketCap / 1e18) * ethPrice; // Convert wei to USD
+                        }
+                        return marketCap;
+                      })())}
+                    </div>
+                  </div>
+                </div>
+              </div>
+              
+              <div className="flex items-center gap-2">
+                <button 
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleViewCoinDetails();
+                  }}
+                  className="text-xs px-2 py-1 rounded-lg bg-indigo-50 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-100 dark:hover:bg-indigo-800/40 transition-colors font-medium border border-indigo-200 dark:border-indigo-800/50"
+                >
+                  Details
+                </button>
+                <div className={`p-1 rounded-lg transition-colors ${
+                  showTokenDropdown 
+                    ? "bg-indigo-100 dark:bg-indigo-900/40" 
+                    : "bg-gray-100 dark:bg-gray-700/50"
+                }`}>
+                  <svg 
+                    className={`w-4 h-4 transition-transform duration-200 ${
+                      showTokenDropdown ? 'rotate-180' : ''
+                    } ${
+                      showTokenDropdown 
+                        ? "text-indigo-600 dark:text-indigo-400" 
+                        : "text-gray-400"
+                    }`}
+                    fill="none" 
+                    stroke="currentColor" 
+                    viewBox="0 0 24 24"
+                  >
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" />
+                  </svg>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Enhanced Token Dropdown with Global Search */}
+          {showTokenDropdown && (
+            <div className={`absolute top-full left-0 right-0 mt-2 rounded-xl border shadow-xl z-50 backdrop-blur-lg ${
+              theme === "light" 
+                ? "bg-white/95 border-gray-200 shadow-gray-300/20" 
+                : "bg-gray-800/95 border-gray-700 shadow-black/20"
+            }`}>
+              
+              {/* Search Header */}
+              <div className="p-3 border-b border-gray-200/50 dark:border-gray-700/50">
+                <div className="relative">
+                  <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                    <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                    </svg>
+                  </div>
+                  <input
+                    type="text"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    placeholder="Search tokens or paste address..."
+                    className={`w-full pl-10 pr-10 py-2 rounded-lg border text-sm focus:outline-none focus:ring-2 transition-all ${
+                      theme === "light"
+                        ? "bg-gray-50 border-gray-200 placeholder-gray-500 text-gray-900 focus:border-indigo-300 focus:ring-indigo-500/20"
+                        : "bg-gray-800/50 border-gray-700 placeholder-gray-500 text-gray-100 focus:border-indigo-600 focus:ring-indigo-500/20"
+                    }`}
+                  />
+                  {isSearching ? (
+                    <div className="absolute inset-y-0 right-0 pr-3 flex items-center">
+                      <div className="animate-spin rounded-full h-4 w-4 border-2 border-indigo-500 border-t-transparent"></div>
+                    </div>
+                  ) : searchQuery ? (
+                    <button
+                      onClick={() => {
+                        setSearchQuery('');
+                        setGlobalSearchResults([]);
+                      }}
+                      className="absolute inset-y-0 right-0 pr-3 flex items-center text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+                    >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                    </button>
+                  ) : null}
+                </div>
+                
+                {/* Sort Options */}
+                {!searchQuery && (
+                  <div className="flex items-center gap-2 mt-2">
+                    <span className="text-xs text-gray-500">Sort by:</span>
+                    {["value", "name", "balance"].map((option) => (
+                      <button
+                        key={option}
+                        onClick={() => setSortBy(option)}
+                        className={`text-xs px-2 py-1 rounded-md transition-colors capitalize ${
+                          sortBy === option
+                            ? "bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-400"
+                            : "text-gray-500 hover:text-gray-700 dark:hover:text-gray-300"
+                        }`}
+                      >
+                        {option}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Token List */}
+              <div className="max-h-64 overflow-y-auto dropdown-scrollbar">
+                {/* Global Search Results */}
+                {globalSearchResults.length > 0 && (
+                  <div className="p-2">
+                    <div className="text-xs font-medium text-gray-500 px-2 py-1 mb-2">Global Search Results</div>
+                    {globalSearchResults.map((token, index) => (
+                      <div
+                        key={token.address || index}
+                        className={`p-3 rounded-lg cursor-pointer transition-all duration-150 border border-green-200 dark:border-green-800/30 bg-green-50 dark:bg-green-900/20 hover:bg-green-100 dark:hover:bg-green-800/30`}
+                        onClick={() => handleTokenSelect(token)}
+                      >
+                        <div className="flex items-center">
+                          <div className="flex-shrink-0 mr-3">
+                            {token?.mediaContent?.previewImage?.small ? (
+                              <img
+                                src={token.mediaContent.previewImage.small}
+                                alt={token.name || "Token"}
+                                className="w-8 h-8 rounded-full object-cover ring-2 ring-white dark:ring-gray-700"
+                                onError={(e) => {
+                                  e.target.onerror = null;
+                                  e.target.src = `https://via.placeholder.com/32/6366f1/FFFFFF?text=${token?.symbol?.slice(0, 1) || "?"}`
+                                }}
+                              />
+                            ) : (
+                              <div className={`w-8 h-8 rounded-full flex items-center justify-center ring-2 ring-white dark:ring-gray-700 ${
+                                theme === "light" ? "bg-green-100 text-green-700" : "bg-green-900/30 text-green-400"
+                              }`}>
+                                <span className="text-sm font-bold">
+                                  {token?.symbol?.slice(0, 1) || "?"}
+                                </span>
+                              </div>
+                            )}
+                          </div>
+                          
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center justify-between">
+                              <div className="flex items-center min-w-0">
+                                <p className={`text-sm font-semibold truncate ${
+                                  theme === "light" ? "text-gray-900" : "text-white"
+                                }`}>
+                                  {token?.name || "Unknown Token"}
+                                </p>
+                                <span className="ml-2 text-xs text-gray-500 font-medium">
+                                  {formatSymbol(token?.symbol || "---")}
+                                </span>
+                                <span className="ml-2 text-xs px-1.5 py-0.5 rounded bg-green-100 dark:bg-green-800/50 text-green-700 dark:text-green-300 font-medium">
+                                  New
+                                </span>
+                              </div>
+                            </div>
+                            
+                                                                                      {/* Token metrics */}
+                             <div className="flex items-center gap-3 mt-1">
+                               <div className="text-xs text-gray-600 dark:text-gray-400">
+                                 MCap: ${formatLargeNumber((() => {
+                                   const marketCap = parseFloat(token?.marketCap || 0);
+                                   if (marketCap > 1e15) {
+                                     return (marketCap / 1e18) * ethPrice; // Convert wei to USD
+                                   }
+                                   return marketCap;
+                                 })())}
+                               </div>
+                               {token?.totalVolume && parseFloat(token.totalVolume) > 0 && (
+                                 <div className="text-xs text-gray-600 dark:text-gray-400">
+                                   Vol: ${formatLargeNumber((() => {
+                                     const volume = parseFloat(token.totalVolume);
+                                     if (volume > 1e15) {
+                                       return (volume / 1e18) * ethPrice; // Convert wei to USD
+                                     }
+                                     return volume;
+                                   })())}
+                                 </div>
+                               )}
+                             </div>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* User's Tokens */}
+                {(filteredAndSortedTokens.length > 0 || (!searchQuery && tokens.length > 0)) && (
+                  <div className="p-2">
+                    {globalSearchResults.length > 0 && (
+                      <div className="text-xs font-medium text-gray-500 px-2 py-1 mb-2 border-t border-gray-200/50 dark:border-gray-700/50 pt-3">Your Tokens</div>
+                    )}
+                    {(searchQuery ? filteredAndSortedTokens : filteredAndSortedTokens).map((token, index) => {
+                      const tokenData = token.node?.coin;
+                      const isCurrentlySelected = tokenData?.address === coin?.address;
+                      const tokenValue = calculateTokenValue(token);
+                      
+                      return (
+                        <div
+                          key={tokenData?.address || index}
+                          className={`p-3 rounded-lg cursor-pointer transition-all duration-150 ${
+                            isCurrentlySelected
+                              ? theme === "light"
+                                ? "bg-indigo-50 border border-indigo-200 shadow-sm"
+                                : "bg-indigo-900/30 border border-indigo-800/30 shadow-md"
+                              : theme === "light"
+                                ? "hover:bg-gray-50 border border-transparent"
+                                : "hover:bg-gray-700/40 border border-transparent"
+                          }`}
+                          onClick={() => handleTokenSelect(tokenData)}
+                        >
+                          <div className="flex items-center">
+                            <div className="flex-shrink-0 mr-3">
+                              {tokenData?.mediaContent?.previewImage?.small ? (
+                                <img
+                                  src={tokenData.mediaContent.previewImage.small}
+                                  alt={tokenData.name || "Token"}
+                                  className="w-8 h-8 rounded-full object-cover ring-2 ring-white dark:ring-gray-700"
+                                  onError={(e) => {
+                                    e.target.onerror = null;
+                                    e.target.src = `https://via.placeholder.com/32/6366f1/FFFFFF?text=${tokenData?.symbol?.slice(0, 1) || "?"}`
+                                  }}
+                                />
+                              ) : (
+                                <div className={`w-8 h-8 rounded-full flex items-center justify-center ring-2 ring-white dark:ring-gray-700 ${
+                                  theme === "light" ? "bg-indigo-100 text-indigo-700" : "bg-indigo-900/30 text-indigo-400"
+                                }`}>
+                                  <span className="text-sm font-bold">
+                                    {tokenData?.symbol?.slice(0, 1) || "?"}
+                                  </span>
+                                </div>
+                              )}
+                            </div>
+                            
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center justify-between">
+                                <div className="flex items-center min-w-0">
+                                  <p className={`text-sm font-semibold truncate ${
+                                    theme === "light" ? "text-gray-900" : "text-white"
+                                  }`}>
+                                    {tokenData?.name || "Unknown Token"}
+                                  </p>
+                                  <span className="ml-2 text-xs text-gray-500 font-medium">
+                                    {formatSymbol(tokenData?.symbol || "---")}
+                                  </span>
+                                </div>
+                                <div className="text-right flex-shrink-0">
+                                  <div className="text-xs font-semibold text-gray-900 dark:text-white">
+                                    {formatBalance(token.node?.balance)}
+                                  </div>
+                                  <div className="text-xs text-gray-500">
+                                    {formatUSDValue(tokenValue)}
+                                  </div>
+                                </div>
+                              </div>
+                              
+                              {/* Token metrics */}
+                              <div className="flex items-center gap-3 mt-1">
+                                <div className="text-xs text-gray-600 dark:text-gray-400">
+                                  MCap: ${formatLargeNumber((() => {
+                                    const marketCap = parseFloat(tokenData?.marketCap || 0);
+                                    if (marketCap > 1e15) {
+                                      return (marketCap / 1e18) * ethPrice; // Convert wei to USD
+                                    }
+                                    return marketCap;
+                                  })())}
+                                </div>
+                                {tokenData?.totalVolume && parseFloat(tokenData.totalVolume) > 0 && (
+                                  <div className="text-xs text-gray-600 dark:text-gray-400">
+                                    Vol: ${formatLargeNumber((() => {
+                                      const volume = parseFloat(tokenData.totalVolume);
+                                      if (volume > 1e15) {
+                                        return (volume / 1e18) * ethPrice; // Convert wei to USD
+                                      }
+                                      return volume;
+                                    })())}
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+                
+                {/* No Results */}
+                {filteredAndSortedTokens.length === 0 && globalSearchResults.length === 0 && (
+                  <div className="p-4 text-center">
+                    <p className="text-sm text-gray-500 dark:text-gray-400">
+                      {searchQuery ? "No tokens found matching your search" : "No tokens available"}
+                    </p>
+                    {searchQuery && searchQuery.length > 10 && (
+                      <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">
+                        Try pasting a token contract address for global search
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
+              
+              {/* Footer */}
+              <div className={`p-3 border-t border-gray-200/50 dark:border-gray-700/50 ${
+                theme === "light" ? "bg-gray-50/50" : "bg-gray-800/50"
+              }`}>
+                <p className="text-xs text-gray-500 text-center">
+                  {globalSearchResults.length > 0 
+                    ? `${globalSearchResults.length} global result${globalSearchResults.length !== 1 ? 's' : ''} • ${filteredAndSortedTokens.length} owned`
+                    : `${filteredAndSortedTokens.length} token${filteredAndSortedTokens.length !== 1 ? 's' : ''} available`
+                  }
+                </p>
+              </div>
+            </div>
+          )}
+        </div>
+
         {/* Trade type selection */}
         <div className="grid grid-cols-2 gap-1 mb-4 rounded-xl overflow-hidden">
           <button

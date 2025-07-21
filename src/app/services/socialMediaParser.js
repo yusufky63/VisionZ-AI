@@ -361,15 +361,30 @@ function processImageUrl(imageUrl, platform) {
       .replace(/&quot;/g, '"');
   }
   
-  // Twitter images have CORS issues, use proxy for most cases
-  if (platform === 'twitter' && 
-      (imageUrl.includes('pbs.twimg.com') || 
-       imageUrl.includes('cards.twitter.com') || 
-       imageUrl.includes('nitter.net') ||
-       imageUrl.includes('syndication.twitter.com') ||
-       imageUrl.includes('t.co'))) {
-    // Use our proxy service to bypass CORS (except for data URLs)
-    return `/api/image-proxy?url=${encodeURIComponent(imageUrl)}`;
+  // Enhanced Twitter image handling with better quality and CORS handling
+  if (platform === 'twitter') {
+    if (imageUrl.includes('pbs.twimg.com') || 
+        imageUrl.includes('cards.twitter.com') || 
+        imageUrl.includes('nitter.net') ||
+        imageUrl.includes('syndication.twitter.com') ||
+        imageUrl.includes('t.co')) {
+      
+      // Convert to highest quality format if possible
+      let enhancedUrl = imageUrl;
+      if (imageUrl.includes('pbs.twimg.com')) {
+        enhancedUrl = imageUrl
+          .replace(/\?format=\w+/, '?format=jpg&name=4096x4096')
+          .replace(/&name=\w+/, '&name=4096x4096');
+      }
+      
+      // Use image proxy with enhanced caching and compression
+      return `/api/image-proxy?url=${encodeURIComponent(enhancedUrl)}&quality=high`;
+    }
+    
+    // Handle other Twitter media sources
+    if (imageUrl.match(/https?:\/\/[^/]*twitter\.com\/.*\/media\//)) {
+      return `/api/image-proxy?url=${encodeURIComponent(imageUrl)}&quality=high`;
+    }
   }
   
   // For data URLs (like our SVG placeholder), return as-is
