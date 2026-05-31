@@ -1,28 +1,34 @@
 # VisionZ AI
 
-![Category](https://img.shields.io/badge/Category-AI%20%2B%20Web3%20Tooling-1f1f1f?style=flat-square&labelColor=141414&color=2b2b2b) ![Status](https://img.shields.io/badge/Status-public-1f1f1f?style=flat-square&labelColor=141414&color=2b2b2b)
+VisionZ AI is an AI-powered token creation and discovery platform with generated metadata, image workflows, market views, and Zora/Web3 integration.
 
-AI-powered token creation and discovery platform with generated metadata, images, market views, and trading-oriented pages.
+## Snapshot
 
-## Links
+- **Category:** AI + Web3 token tooling
+- **Status:** Public repository
+- **Live:** https://vision-z-ai.vercel.app
+- **Repository:** https://github.com/yusufky63/VisionZ-AI
+- **Portfolio:** https://codexsha.dev
 
-- Live: https://vision-z-ai.vercel.app
-- Repository: https://github.com/yusufky63/VisionZ-AI
-- Portfolio: https://codexsha.dev
+## Product Scope
 
-## Overview
+VisionZ AI is documented here as a product repository, not just a code dump. The goal of this README is to make the product purpose, runtime surface, and development path clear for future review and maintenance.
 
-VisionZ AI is part of the Codexsha product portfolio. The project is focused on shipping a compact, usable product surface rather than a demo-only prototype. This README is written to make the repository easier to understand, run, and evaluate.
-
-## Key Features
+## Core Capabilities
 
 - AI token idea and metadata generation
 - Image-assisted token creation
 - Market discovery views
 - Trading-oriented token pages
-- Zora/Web3 integration
+- Zora and wallet integration
 
-## Stack
+## Existing README Coverage Preserved
+
+This refresh keeps the important project-specific areas from the previous documentation:
+
+- Vision Z AI ? Smart Web3 Experience
+
+## Tech Stack
 
 - Next.js
 - Zora SDK
@@ -35,33 +41,40 @@ VisionZ AI is part of the Codexsha product portfolio. The project is focused on 
 - ConnectKit
 - Vercel
 
-## Role / Ownership
+## Repository Map
 
-Built the token generation UX, AI integration surface, market views, and Zora/Web3 integration.
+| Path | Purpose |
+| --- | --- |
+| src/app/ | Next.js app routes |
+| src/components/ | Token generation and market UI |
+| src/lib/ | AI and Web3 helpers |
+| public/images/ | Product and integration assets |
 
-## Getting Started
+## Local Development
 
-```bash
-npm install
-npm run dev
-npm run build
-```
+| Command | Purpose |
+| --- | --- |
+| npm run dev | Run development server |
+| npm run build | Build production app |
+| npm run start | Start production server |
+| npm run lint | Run lint checks |
+| npm run type-check | Run TypeScript checks |
+| npm run lint-watch | Run lint watcher |
 
-## Environment
+## Environment Notes
 
-Create a local environment file from the project conventions and configure only the values needed for the flow you are running. Do not commit secrets.
+Use local environment files for secrets and deployment-specific values. Do not commit real keys.
 
-Typical values used by this project include:
-
-- Hugging Face/Replicate API keys
+- Hugging Face API key
+- Replicate API key
 - Supabase credentials
-- Zora and wallet connector configuration
+- Zora/WalletConnect configuration
 
-## Project Notes
+## Operational Notes
 
-- Status: Public repository and live deployment.
-- Private or sensitive implementation details are intentionally not documented in public-facing copy.
-- The README should stay aligned with the live product and the Codexsha portfolio page.
+- Keep this README aligned with the live product and portfolio copy.
+- Prefer small, documented changes over large undocumented rewrites.
+- This expands the previous one-heading README into a maintainable repository guide.
 
 ## Maintainer
 
