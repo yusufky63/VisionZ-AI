@@ -1,85 +1,49 @@
 # VisionZ AI
 
-VisionZ AI is an AI-powered token creation and discovery platform with generated metadata, image workflows, market views, and Zora/Web3 integration.
+VisionZ AI is an AI-powered Web3 creation and discovery platform for generating token ideas, metadata, visuals, market pages, and Zora/Base-oriented coin experiences.
 
-## Snapshot
-
-- **Category:** AI + Web3 token tooling
-- **Status:** Public repository
-- **Live:** https://vision-z-ai.vercel.app
-- **Repository:** https://github.com/yusufky63/VisionZ-AI
-- **Portfolio:** https://codexsha.dev
-
-## Product Scope
-
-VisionZ AI is documented here as a product repository, not just a code dump. The goal of this README is to make the product purpose, runtime surface, and development path clear for future review and maintenance.
+The repository combines AI services, Zora tooling, Supabase-backed data, wallet connection, and trading/discovery UI modules into a single Next.js product.
 
 ## Core Capabilities
 
-- AI token idea and metadata generation
-- Image-assisted token creation
-- Market discovery views
-- Trading-oriented token pages
-- Zora and wallet integration
+- AI-assisted token idea, description, and metadata generation.
+- Image generation/processing flows through Hugging Face and Replicate-oriented services.
+- Zora SDK and protocol integrations for coin creation and token pages.
+- Market/discovery views for browsing generated assets and token concepts.
+- Wallet connection with ConnectKit, Wagmi, Viem, and Ethers.
+- Supabase-backed persistence for generated content and product state.
 
-## Existing README Coverage Preserved
-
-This refresh keeps the important project-specific areas from the previous documentation:
-
-- Vision Z AI ? Smart Web3 Experience
-
-## Tech Stack
-
-- Next.js
-- Zora SDK
-- Supabase
-- Hugging Face
-- Replicate
-- Wagmi
-- Viem
-- Ethers
-- ConnectKit
-- Vercel
-
-## Repository Map
-
-| Path | Purpose |
+| Layer | Tools |
 | --- | --- |
-| src/app/ | Next.js app routes |
-| src/components/ | Token generation and market UI |
-| src/lib/ | AI and Web3 helpers |
-| public/images/ | Product and integration assets |
+| Frontend | Next.js, React, TypeScript, Tailwind CSS, Headless UI, Heroicons, Lucide React |
+| AI | Hugging Face Inference, Replicate, AI-assisted copy/image workflows |
+| Web3 | Zora SDK, Zora protocol packages, Wagmi, Viem, Ethers, ConnectKit |
+| Data/Infra | Supabase, React Query, Axios, Vercel Analytics |
 
-## Local Development
+## Repository Structure
+
+- `src/` - app routes, components, AI services, Zora/Web3 logic, and token pages.
+- `public/` - static assets and metadata.
+- `next.config.js` - Next.js configuration.
+- `tailwind.config.js` - styling configuration.
+
+## Development
+
+```bash
+npm install
+npm run dev
+```
 
 | Command | Purpose |
 | --- | --- |
-| npm run dev | Run development server |
-| npm run build | Build production app |
-| npm run start | Start production server |
-| npm run lint | Run lint checks |
-| npm run type-check | Run TypeScript checks |
-| npm run lint-watch | Run lint watcher |
+| `npm run dev` | Start local development. |
+| `npm run build` | Build for production. |
+| `npm start` | Run the production server. |
+| `npm run lint` | Run lint checks. |
+| `npm run type-check` | Run TypeScript checks. |
+| `npm run lint-watch` | Run linting in watch mode. |
 
-## Environment Notes
+## Status
 
-Use local environment files for secrets and deployment-specific values. Do not commit real keys.
-
-- Hugging Face API key
-- Replicate API key
-- Supabase credentials
-- Zora/WalletConnect configuration
-
-## Operational Notes
-
-- Keep this README aligned with the live product and portfolio copy.
-- Prefer small, documented changes over large undocumented rewrites.
-- This expands the previous one-heading README into a maintainable repository guide.
-
-## Maintainer
-
-Built by Yusuf / Codexsha.
-
-- GitHub: https://github.com/yusufky63
-- X: https://x.com/codexsha
-- Telegram: https://t.me/codexsha
+- Repository: https://github.com/yusufky63/VisionZ-AI
+- Live app: https://vision-z-ai.vercel.app
